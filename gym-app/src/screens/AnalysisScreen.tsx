@@ -7,19 +7,25 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   SafeAreaView,
+  Image,
+  Dimensions,
 } from 'react-native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RouteProp } from '@react-navigation/native';
-import { RootStackParamList, AnalysisResult } from '../types';
+import { RootStackParamList, AnalysisResult, FrameAnalysis } from '../types';
 import { analyzer } from '../services/TFLiteAnalyzer';
+
+const SCREEN_WIDTH = Dimensions.get('window').width;
+// Video is recorded in portrait, assume ~9:16 ratio; we display full width
+const FRAME_DISPLAY_WIDTH = SCREEN_WIDTH - 32;
+const FRAME_DISPLAY_HEIGHT = FRAME_DISPLAY_WIDTH * (16 / 9);
+
+const CLIP_DURATION_MS = 9000; // matches CameraScreen max
 
 type Props = {
   navigation: StackNavigationProp<RootStackParamList, 'Analysis'>;
   route: RouteProp<RootStackParamList, 'Analysis'>;
 };
-
-// Estimated clip duration in ms (used for frame sampling; update if you track actual duration)
-const DEFAULT_DURATION_MS = 8000;
 
 export default function AnalysisScreen({ navigation, route }: Props) {
   const { exercise, videoUri } = route.params;
@@ -30,11 +36,7 @@ export default function AnalysisScreen({ navigation, route }: Props) {
   useEffect(() => {
     (async () => {
       try {
-        const analysis = await analyzer.analyzeVideo(
-          videoUri,
-          exercise.name,
-          DEFAULT_DURATION_MS,
-        );
+        const analysis = await analyzer.analyzeVideo(videoUri, exercise.name, CLIP_DURATION_MS);
         setResult(analysis);
       } catch (e) {
         setError('Analysis failed. Please try again.');
@@ -59,7 +61,6 @@ export default function AnalysisScreen({ navigation, route }: Props) {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        {/* Header */}
         <View style={styles.header}>
           <Text style={styles.title}>Form Analysis</Text>
           <Text style={styles.exerciseName}>{exercise.name}</Text>
@@ -68,7 +69,8 @@ export default function AnalysisScreen({ navigation, route }: Props) {
         {loading && (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#e07b39" />
-            <Text style={styles.loadingText}>Analyzing your form…</Text>
+            <Text style={styles.loadingText}>Running pose analysis…</Text>
+            <Text style={styles.loadingSubtext}>Checking {exercise.name} form across 8 frames</Text>
           </View>
         )}
 
@@ -80,7 +82,7 @@ export default function AnalysisScreen({ navigation, route }: Props) {
 
         {result && (
           <>
-            {/* Score ring */}
+            {/* Score */}
             <View style={styles.scoreCard}>
               <View style={[styles.scoreCircle, { borderColor: scoreColor(result.overallScore) }]}>
                 <Text style={[styles.scoreNumber, { color: scoreColor(result.overallScore) }]}>
@@ -93,7 +95,52 @@ export default function AnalysisScreen({ navigation, route }: Props) {
               </Text>
             </View>
 
-            {/* Feedback */}
+            {/* Worst frame with post-it annotations */}
+            {result.worstFrame?.thumbnailUri && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Worst Frame</Text>
+                <View style={[styles.frameContainer, { width: FRAME_DISPLAY_WIDTH, height: FRAME_DISPLAY_HEIGHT }]}>
+                  <Image
+                    source={{ uri: result.worstFrame.thumbnailUri }}
+                    style={StyleSheet.absoluteFill}
+                    resizeMode="cover"
+                  />
+
+                  {/* Post-it notes anchored to error keypoints */}
+                  {result.worstFrame.annotations.map((annotation, i) => {
+                    const kp = result.worstFrame!.keypoints![annotation.keypointIndex];
+                    if (!kp || kp.score < 0.3) return null;
+
+                    // Map normalised (y, x) → pixel position on the displayed frame
+                    const top  = kp.y * FRAME_DISPLAY_HEIGHT;
+                    const left = kp.x * FRAME_DISPLAY_WIDTH;
+
+                    // Stagger overlapping notes
+                    const offsetY = i * 12;
+
+                    return (
+                      <View
+                        key={i}
+                        style={[styles.postit, { top: Math.max(4, top - 80 - offsetY), left: Math.min(left, FRAME_DISPLAY_WIDTH - 160) }]}
+                      >
+                        {/* Connector dot */}
+                        <View style={[styles.postitDot, { top: 80 + offsetY, left: 16 }]} />
+                        <Text style={styles.postitTitle}>{annotation.title}</Text>
+                        <Text style={styles.postitTip}>{annotation.tip}</Text>
+                      </View>
+                    );
+                  })}
+
+                  {result.worstFrame.annotations.length === 0 && (
+                    <View style={styles.goodFormBadge}>
+                      <Text style={styles.goodFormText}>✓ Good form on this frame</Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+            )}
+
+            {/* Feedback list */}
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Feedback</Text>
               {result.feedback.map((line, i) => (
@@ -104,16 +151,16 @@ export default function AnalysisScreen({ navigation, route }: Props) {
               ))}
             </View>
 
-            {/* Frame-by-frame timeline */}
+            {/* Frame timeline */}
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Frame Timeline</Text>
               <View style={styles.timeline}>
                 {result.frameResults.map((frame, i) => {
-                  const barHeight = Math.max(8, frame.score * 60);
+                  const barH = Math.max(8, frame.score * 60);
                   const color = scoreColor(frame.score * 100);
                   return (
                     <View key={i} style={styles.timelineBar}>
-                      <View style={[styles.bar, { height: barHeight, backgroundColor: color }]} />
+                      <View style={[styles.bar, { height: barH, backgroundColor: color }]} />
                       <Text style={styles.timelineLabel}>{(frame.timestamp / 1000).toFixed(1)}s</Text>
                     </View>
                   );
@@ -121,7 +168,7 @@ export default function AnalysisScreen({ navigation, route }: Props) {
               </View>
             </View>
 
-            {/* Targets */}
+            {/* Muscles */}
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Target Muscles</Text>
               <View style={styles.muscleChips}>
@@ -158,183 +205,100 @@ export default function AnalysisScreen({ navigation, route }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0f0f0f',
-  },
-  scroll: {
-    paddingHorizontal: 20,
-    paddingBottom: 40,
-  },
-  header: {
-    paddingTop: 20,
-    marginBottom: 24,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#ffffff',
-    letterSpacing: -0.5,
-  },
-  exerciseName: {
-    fontSize: 15,
-    color: '#e07b39',
-    fontWeight: '600',
-    marginTop: 4,
-  },
-  loadingContainer: {
-    alignItems: 'center',
-    paddingVertical: 60,
-    gap: 16,
-  },
-  loadingText: {
-    color: '#888',
-    fontSize: 15,
-  },
-  errorContainer: {
-    backgroundColor: '#2a1515',
-    borderRadius: 12,
-    padding: 16,
-    marginVertical: 16,
-  },
-  errorText: {
-    color: '#ff3b30',
-    fontSize: 14,
-    textAlign: 'center',
-  },
+  container: { flex: 1, backgroundColor: '#0f0f0f' },
+  scroll: { paddingHorizontal: 16, paddingBottom: 40 },
+  header: { paddingTop: 20, marginBottom: 24 },
+  title: { fontSize: 28, fontWeight: '800', color: '#fff', letterSpacing: -0.5 },
+  exerciseName: { fontSize: 15, color: '#e07b39', fontWeight: '600', marginTop: 4 },
+
+  loadingContainer: { alignItems: 'center', paddingVertical: 60, gap: 12 },
+  loadingText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  loadingSubtext: { color: '#666', fontSize: 13 },
+
+  errorContainer: { backgroundColor: '#2a1515', borderRadius: 12, padding: 16, marginVertical: 16 },
+  errorText: { color: '#ff3b30', fontSize: 14, textAlign: 'center' },
+
   scoreCard: {
-    alignItems: 'center',
-    paddingVertical: 32,
-    backgroundColor: '#1a1a1a',
-    borderRadius: 20,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: '#2a2a2a',
+    alignItems: 'center', paddingVertical: 28, backgroundColor: '#1a1a1a',
+    borderRadius: 20, marginBottom: 20, borderWidth: 1, borderColor: '#2a2a2a',
   },
   scoreCircle: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    borderWidth: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
+    width: 110, height: 110, borderRadius: 55, borderWidth: 6,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 10,
   },
-  scoreNumber: {
-    fontSize: 40,
-    fontWeight: '800',
-  },
-  scoreUnit: {
-    color: '#555',
-    fontSize: 13,
-    marginTop: -4,
-  },
-  scoreLabel: {
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  section: {
-    marginBottom: 20,
-  },
+  scoreNumber: { fontSize: 38, fontWeight: '800' },
+  scoreUnit: { color: '#555', fontSize: 12, marginTop: -4 },
+  scoreLabel: { fontSize: 18, fontWeight: '700' },
+
+  section: { marginBottom: 20 },
   sectionTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#555',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-    marginBottom: 12,
+    fontSize: 11, fontWeight: '700', color: '#555',
+    letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 10,
   },
-  feedbackItem: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 10,
-    backgroundColor: '#1a1a1a',
-    borderRadius: 10,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#2a2a2a',
+
+  // Frame + post-it overlay
+  frameContainer: {
+    borderRadius: 14, overflow: 'hidden',
+    backgroundColor: '#1a1a1a', position: 'relative',
   },
-  feedbackBullet: {
-    color: '#e07b39',
-    fontSize: 16,
-    lineHeight: 22,
-  },
-  feedbackText: {
-    color: '#ccc',
-    fontSize: 14,
-    lineHeight: 22,
-    flex: 1,
-  },
-  timeline: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    backgroundColor: '#1a1a1a',
-    borderRadius: 14,
-    padding: 16,
-    gap: 6,
-    height: 100,
-    borderWidth: 1,
-    borderColor: '#2a2a2a',
-  },
-  timelineBar: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: 4,
-  },
-  bar: {
-    width: '100%',
+  postit: {
+    position: 'absolute',
+    width: 155,
+    backgroundColor: '#FFF176',
     borderRadius: 4,
-    minHeight: 8,
+    padding: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.4,
+    shadowRadius: 4,
+    elevation: 5,
+    // slight rotation for natural post-it feel
+    transform: [{ rotate: '-2deg' }],
   },
-  timelineLabel: {
-    color: '#555',
-    fontSize: 9,
+  postitDot: {
+    position: 'absolute',
+    width: 8, height: 8, borderRadius: 4,
+    backgroundColor: '#e53935',
   },
-  muscleChips: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
+  postitTitle: { fontSize: 11, fontWeight: '800', color: '#111', marginBottom: 3 },
+  postitTip: { fontSize: 10, color: '#333', lineHeight: 14 },
+  goodFormBadge: {
+    position: 'absolute', bottom: 12, alignSelf: 'center',
+    backgroundColor: 'rgba(52,199,89,0.85)', paddingHorizontal: 14,
+    paddingVertical: 6, borderRadius: 20,
   },
+  goodFormText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+
+  feedbackItem: {
+    flexDirection: 'row', gap: 10, marginBottom: 8,
+    backgroundColor: '#1a1a1a', borderRadius: 10, padding: 12,
+    borderWidth: 1, borderColor: '#2a2a2a',
+  },
+  feedbackBullet: { color: '#e07b39', fontSize: 16, lineHeight: 22 },
+  feedbackText: { color: '#ccc', fontSize: 13, lineHeight: 20, flex: 1 },
+
+  timeline: {
+    flexDirection: 'row', alignItems: 'flex-end', backgroundColor: '#1a1a1a',
+    borderRadius: 14, padding: 12, gap: 6, height: 90,
+    borderWidth: 1, borderColor: '#2a2a2a',
+  },
+  timelineBar: { flex: 1, alignItems: 'center', justifyContent: 'flex-end', gap: 4 },
+  bar: { width: '100%', borderRadius: 3, minHeight: 8 },
+  timelineLabel: { color: '#555', fontSize: 9 },
+
+  muscleChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: {
-    backgroundColor: '#1e1610',
-    borderWidth: 1,
-    borderColor: '#e07b39',
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 6,
+    backgroundColor: '#1e1610', borderWidth: 1, borderColor: '#e07b39',
+    borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6,
   },
-  chipText: {
-    color: '#e07b39',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  actions: {
-    gap: 10,
-    marginTop: 8,
-  },
-  primaryButton: {
-    backgroundColor: '#e07b39',
-    borderRadius: 14,
-    paddingVertical: 16,
-    alignItems: 'center',
-  },
-  primaryButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
+  chipText: { color: '#e07b39', fontSize: 13, fontWeight: '600' },
+
+  actions: { gap: 10, marginTop: 8 },
+  primaryButton: { backgroundColor: '#e07b39', borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
+  primaryButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   secondaryButton: {
-    backgroundColor: '#1a1a1a',
-    borderRadius: 14,
-    paddingVertical: 16,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#2a2a2a',
+    backgroundColor: '#1a1a1a', borderRadius: 14, paddingVertical: 16,
+    alignItems: 'center', borderWidth: 1, borderColor: '#2a2a2a',
   },
-  secondaryButtonText: {
-    color: '#ccc',
-    fontSize: 16,
-    fontWeight: '600',
-  },
+  secondaryButtonText: { color: '#ccc', fontSize: 16, fontWeight: '600' },
 });

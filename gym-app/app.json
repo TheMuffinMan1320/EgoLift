@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "gym-app",
+    "name": "EgoLift",
     "slug": "gym-app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -12,6 +12,7 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
+      "bundleIdentifier": "com.afnanhasan.egolift",
       "supportsTablet": true,
       "infoPlist": {
         "NSCameraUsageDescription": "EgoLift uses the camera to record your exercise for AI form analysis.",
@@ -19,7 +20,10 @@
       }
     },
     "android": {
-      "permissions": ["android.permission.CAMERA", "android.permission.RECORD_AUDIO"],
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -30,6 +34,9 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "react-native-fast-tflite"
+    ]
   }
 }
